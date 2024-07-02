@@ -1,6 +1,6 @@
-import { SocketConfig, WAMediaUpload, NewsletterMetadata, NewsletterReactionMode, NewsletterViewRole, XWAPaths, NewsletterReaction, NewsletterFetchedUpdate } from '../Types'
+import { SocketConfig, WAMediaUpload, NewsletterMetadata, NewsletterReactionMode, NewsletterViewRole, XWAPaths, NewsletterReaction, NewsletterFetchedUpdate, NewsLetterMetadata2 } from '../Types'
 import { decryptMessageNode, generateMessageID, generateProfilePicture } from '../Utils'
-import { BinaryNode, getAllBinaryNodeChildren, getBinaryNodeChild, getBinaryNodeChildren, S_WHATSAPP_NET } from '../WABinary'
+import { BinaryNode, getAllBinaryNodeChildren, getBinaryNodeChild, getBinaryNodeChildren, S_WHATSAPP_NET, getBinaryNodeChildString } from '../WABinary'
 import { makeGroupsSocket } from './groups'
 
 enum QueryIds {
@@ -14,7 +14,9 @@ enum QueryIds {
     ADMIN_COUNT = '7130823597031706',
     CHANGE_OWNER = '7341777602580933',
     DELETE = '8316537688363079',
-    DEMOTE = '6551828931592903'
+    DEMOTE = '6551828931592903',
+	GETSUBSCRIBED = '6388546374527196',
+
 }
 
 export const makeNewsletterSocket = (config: SocketConfig) => {
@@ -33,6 +35,24 @@ export const makeNewsletterSocket = (config: SocketConfig) => {
 				to: jid,
 			},
 			content
+		})
+	)
+
+    const newsletterQueryCustom = async(variables: object | undefined, queryId: string) => (
+		query({
+			tag: 'iq',
+			attrs: {
+				type: 'get',
+				xmlns: 'w:mex',
+				to: S_WHATSAPP_NET,
+			},
+			content: [{
+				tag: 'query',
+				attrs: {
+					'query_id': queryId
+				},
+				content: JSON.stringify({ variables })
+			}]
 		})
 	)
 
@@ -262,6 +282,38 @@ export const makeNewsletterSocket = (config: SocketConfig) => {
             ])
 
             return await parseFetchedUpdates(result, 'updates')
+        },
+
+        getSubscribedNewsletters: async() => {
+            const result = await newsletterQueryCustom(undefined, QueryIds.GETSUBSCRIBED)
+    
+            const node = getBinaryNodeChildString(result, 'result')
+            const json = JSON.parse(node!)
+            if(!json.data) {
+                throw new Error('Error while fetch subscribed newsletters ' + json)
+            }
+    
+            return json.data.xwa2_newsletter_subscribed.map((v: any) => extractNewsletterMetadata2(v))
+        },
+
+        getNewsletterInfo: async(key: string) => {
+            const result = await newsletterQueryCustom({
+                input: {
+                    key,
+                    type: 'INVITE'
+                },
+                'fetch_viewer_metadata': false,
+                'fetch_full_image': true,
+                'fetch_creation_time': true,
+            }, QueryIds.METADATA)
+    
+            const node = getBinaryNodeChildString(result, 'result')
+            const json = JSON.parse(node!)
+            if(!json.data) {
+                throw new Error('Error while fetch newsletter info ' + json)
+            }
+    
+            return extractNewsletterMetadata2(json.data?.xwa2_newsletter)
         }
     }
 }
@@ -289,4 +341,24 @@ export const extractNewsletterMetadata = (node: BinaryNode, isCreate?: boolean) 
     }
 
     return metadata
+}
+
+export const extractNewsletterMetadata2 = (data: any): NewsLetterMetadata2 => {
+	return {
+		id: data.id,
+		state: data.state,
+		creationTime: +data.thread_metadata.creation_time,
+		inviteCode: data.thread_metadata.invite,
+		name: data.thread_metadata.name.text,
+		desc: data.thread_metadata.description.text,
+		subscriberCount: +data.thread_metadata.subscribers_count,
+		verification: data.thread_metadata.verification,
+		picture: data.thread_metadata.picture?.direct_path,
+		preview: data.thread_metadata.preview.direct_path,
+		settings: {
+			reaction: data.thread_metadata.settings?.reaction_codes.value
+		},
+		mute: data.viewer_metadata?.mute,
+		role: data.viewer_metadata?.role
+	}
 }
